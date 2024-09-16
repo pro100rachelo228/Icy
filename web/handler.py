@@ -1,5 +1,5 @@
 from http.server import BaseHTTPRequestHandler
-from json import JSONEncoder, loads
+from json import JSONDecodeError, JSONEncoder, loads
 from os import environ, listdir, remove
 from os.path import exists, isdir, isfile, join
 from pathlib import Path
@@ -8,6 +8,7 @@ from socket import socket
 from socketserver import BaseServer
 from threading import Lock
 from typing import Any, Literal
+from traceback import print_exc as print_traceback
 
 # Don't have stubs for gpt4all
 from gpt4all import GPT4All  # type: ignore
@@ -109,11 +110,15 @@ class Handler(BaseHTTPRequestHandler):
             ]
             models_ggufs: list[str] = [x["filename"] for x in gpt_models]
             for file in listdir(Path(".") / ".models"):
-                if not isfile(Path('.') / ".models" / file):
+                if not isfile(Path(".") / ".models" / file):
                     continue
                 if file not in models_ggufs:
                     gpt_models.append(
-                        {"name": file.removesuffix(".gguf"), "filename": file, "loaded": True}
+                        {
+                            "name": file.removesuffix(".gguf"),
+                            "filename": file,
+                            "loaded": True,
+                        }
                     )
                 else:
                     for each in gpt_models:
@@ -166,11 +171,15 @@ class Handler(BaseHTTPRequestHandler):
                 "intention_best_proba": 0.5,
             }
             if exists("prev.data"):
-                with open("prev.data", "rt") as file:
-                    prev_data: dict[str, Any] = loads(file.read())
-                config.update(
-                    (key, prev_data[key]) for key in config.keys() & prev_data.keys()
-                )
+                try:
+                    with open("prev.data", "rb") as file:
+                        prev_data: dict[str, Any] = loads(file.read())
+                    config.update(
+                        (key, prev_data[key])
+                        for key in config.keys() & prev_data.keys()
+                    )
+                except (OSError, JSONDecodeError):
+                    print_traceback()
             openai_token_exists = "OPENAI_API_KEY" in environ
             if openai_token_exists:
                 try:
@@ -194,8 +203,11 @@ class Handler(BaseHTTPRequestHandler):
             if Handler.server_phase != "Configuration" or not exists("prev.data"):
                 self.send_redirect("/")
             Handler.server_phase = "Starting"
-            with open("prev.data") as file:
-                config: dict[str, Any] = loads(file.read())
+            try:
+                with open("prev.data") as file:
+                    config = loads(file.read())
+            except (OSError, JSONDecodeError):
+                config = {}
             Handler.result_config.update(config)
             Handler.config_lock.release()
             self.send_redirect("/")
@@ -215,7 +227,7 @@ class Handler(BaseHTTPRequestHandler):
                 config: dict[str, Any] = loads(data.decode())
                 if exists("prev.data"):
                     with open("prev.data", "r") as file:
-                        config: dict[str, Any] = loads(file.read())
+                        config = loads(file.read())
                     config.update(loads(data.decode()))
                 with open("prev.data", "w") as file:
                     file.write(JSONEncoder().encode(loads(data.decode())))
